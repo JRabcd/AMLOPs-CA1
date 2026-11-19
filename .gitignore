@@ -17,6 +17,9 @@ venv/
 
 # Jupyter
 .ipynb_checkpoints/
+.matplotlib_cache/
+.jupyter/
+.ipython_cache/
 
 # MLflow (local runs; the team server is on Elastic Beanstalk)
 mlruns/
