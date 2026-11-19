@@ -16,9 +16,9 @@ Profiled from `customers_base.csv` (901,312 rows), `orders_base.csv` (949,889) a
 | `order_id` repeats 3 times in orders and labels, each time in a **different country** for a **different customer** (e.g. `431b5e1fcd` in MY and PK) | These are separate orders, not duplicates. Primary key is **`(country_code, order_id)`** for both orders and labels |
 | `(UPPER(country_code), order_id)` is unique in both orders and labels | The composite key holds once cleaning upper-cases country codes |
 | 443 labels have no matching order; 14 labels point to customers not in customers | **No foreign keys.** Hard FKs would reject real rows, and a new batch's files may load in any order. Joins use indexed columns instead |
-| Lower-case country codes (`pk`, `my`, `ph`), `mobile_verified` = `True`/`False`/`yes`, `collect_type` = `Delivery`/`delivery`/`pickup` | Fixed by cleaning (PBI-03) before load; columns store the cleaned form |
+| Lower-case country codes (`pk`, `my`, `ph`), `mobile_verified` = `True`/`False`/`yes`, `collect_type` = `Delivery`/`delivery`/`pickup` | Fixed by cleaning (PBI-03) before load; columns store the cleaned form: country codes upper-case, `collect_type` lower-case, `mobile_verified` 1/0, `order_id` unchanged (lower-case hex). MySQL's `utf8mb4_unicode_ci` compares `my` and `MY` as equal, but pandas joins are case-sensitive, so cleaning must upper-case country codes anyway |
 | `order_date` mixes `2023/04/09`, `2023-04-09` and `2023/Feb/09`; `first_order_datetime` is `YYYY-MM-DD HH:MM:SS` with 712 blanks | Stored as `DATE` and `DATETIME`; `first_order_datetime` allows `NULL` |
-| `payment_method` blank in 21,501 orders; `num_items_ordered` blank once | Both columns allow `NULL` (cleaning decides whether to fill them) |
+| `payment_method` blank in 21,501 orders; `num_items_ordered` blank once | Both columns allow `NULL`. **Convention: a blank becomes `NULL`**, not `''` or `'unknown'`, so it can't turn into extra categories in training. Cleaning outputs `None`; the ETL converts pandas `NaN` to `None` when loading |
 | Money values have long float tails (e.g. `5.387818896776103` SGD); max order 662.88, max 50-day payment 42,569.30 | `DECIMAL(12,4)`: exact, enough range, 4 decimal places |
 | Counts are whole numbers; largest is 2,162 orders in 50 days | `SMALLINT UNSIGNED` (0–65,535) |
 | IDs are 10-character hex strings | `VARCHAR(20)`, leaving room if a later batch uses longer IDs |
@@ -49,9 +49,9 @@ customers (`INSERT … ON DUPLICATE KEY UPDATE`).
 | `country_code` | CHAR(2) | no | **PK** part 1 |
 | `order_id` | VARCHAR(20) | no | **PK** part 2 |
 | `collect_type` | VARCHAR(20) | no | e.g. `delivery`, `pickup` after cleaning |
-| `payment_method` | VARCHAR(40) | yes | |
+| `payment_method` | VARCHAR(40) | yes | `NULL` when blank in the source file |
 | `order_value` | DECIMAL(12,4) | no | SGD |
-| `num_items_ordered` | SMALLINT UNSIGNED | yes | |
+| `num_items_ordered` | SMALLINT UNSIGNED | yes | `NULL` when blank in the source file |
 | `refund_value` | DECIMAL(12,4) | no | SGD, default 0 |
 | `order_date` | DATE | no | Indexed for time-based queries |
 | `batch_id`, `loaded_at` | | no | As in customers |
@@ -70,12 +70,17 @@ customers (`INSERT … ON DUPLICATE KEY UPDATE`).
 |---|---|---|
 | `batch_id` | VARCHAR(32) **PK** | Postfix of the files, e.g. `base` |
 | `customers_url`, `orders_url`, `labels_url` | VARCHAR(500) | Where the files came from |
-| `rows_customers`, `rows_orders`, `rows_labels` | INT UNSIGNED | Rows loaded |
-| `status` | VARCHAR(20) | `running`, `success` or `failed` |
+| `rows_customers`, `rows_orders`, `rows_labels` | INT UNSIGNED | Rows in each **cleaned file** (not the database's affected-row count, which counts an upsert update as 2) |
+| `status` | VARCHAR(20) | `running`, `success` or `failed` (CHECK constraint) |
+| `error_message` | VARCHAR(500) | Why a failed batch failed; `NULL` otherwise |
 | `started_at`, `finished_at` | DATETIME | |
 
 This gives the ETL (PBI-09) a place to log row counts, lets it skip a batch that already loaded
 successfully, and gives retraining runs (PBI-10) a batch name for their MLflow run names.
+
+**Retrying a failed batch:** `batch_id` is the primary key, so the ETL writes this row with
+`INSERT … ON DUPLICATE KEY UPDATE` (as for customers). A re-run resets `status` to `running`, clears
+`error_message` and updates the times and counts. A batch whose `status` is already `success` is skipped.
 
 ## How the tables join
 

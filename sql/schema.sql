@@ -66,5 +66,7 @@ CREATE TABLE IF NOT EXISTS etl_batches (
   status          VARCHAR(20)   NOT NULL DEFAULT 'running',
   started_at      DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
   finished_at     DATETIME      NULL,
-  PRIMARY KEY (batch_id)
+  error_message   VARCHAR(500)  NULL,
+  PRIMARY KEY (batch_id),
+  CONSTRAINT chk_etl_batches_status CHECK (status IN ('running', 'success', 'failed'))
 ) ENGINE=InnoDB;
