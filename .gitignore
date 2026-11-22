@@ -6,6 +6,9 @@
 # Data: CSV batches are large and come from the operations team
 data/*
 !data/README.md
+temp/
+.tmp/
+*.tmp
 
 # Python
 __pycache__/
