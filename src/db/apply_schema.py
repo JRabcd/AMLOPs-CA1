@@ -1,37 +1,23 @@
 """Create the SP-buy tables on the team RDS database (PBI-05.3).
 
-Connection details come from environment variables (or a .env file), never from code:
-
-    DB_HOST      RDS endpoint, e.g. spbuy-db.xxxxxxxx.us-east-1.rds.amazonaws.com
-    DB_PORT      default 3306
-    DB_USER      master or app user
-    DB_PASSWORD  its password
+Connection settings come from src/db/config.py (environment variables or .env).
 
 Usage (from the repo root):
 
-    python src/db/apply_schema.py
+    python -m src.db.apply_schema
 
-Safe to run more than once: sql/schema.sql only creates what does not exist yet.
+Safe to run more than once: sql/schema.sql only creates what does not exist yet, then every
+file in sql/migrations/ is applied in name order (each is written to be safe to re-run), so a
+database created from an older schema is brought up to date.
 """
-import os
 import sys
 from pathlib import Path
 
-import pymysql
+from src.db.config import ConfigError, connect, get_settings
 
-SCHEMA_FILE = Path(__file__).resolve().parents[2] / "sql" / "schema.sql"
-
-
-def load_dotenv(path: Path) -> None:
-    """Read KEY=VALUE lines from .env into the environment (existing variables win)."""
-    if not path.exists():
-        return
-    for line in path.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, value = line.split("=", 1)
-        os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
+SQL_DIR = Path(__file__).resolve().parents[2] / "sql"
+SCHEMA_FILE = SQL_DIR / "schema.sql"
+MIGRATIONS_DIR = SQL_DIR / "migrations"
 
 
 def statements(sql: str) -> list[str]:
@@ -41,27 +27,23 @@ def statements(sql: str) -> list[str]:
 
 
 def main() -> int:
-    load_dotenv(Path(__file__).resolve().parents[2] / ".env")
-    missing = [k for k in ("DB_HOST", "DB_USER", "DB_PASSWORD") if not os.environ.get(k)]
-    if missing:
-        print(f"Missing environment variables: {', '.join(missing)}", file=sys.stderr)
+    try:
+        settings = get_settings()
+        conn = connect(use_database=False, autocommit=True)
+    except ConfigError as exc:
+        print(exc, file=sys.stderr)
         return 1
-
-    conn = pymysql.connect(
-        host=os.environ["DB_HOST"],
-        port=int(os.environ.get("DB_PORT", "3306")),
-        user=os.environ["DB_USER"],
-        password=os.environ["DB_PASSWORD"],
-        connect_timeout=10,
-        autocommit=True,
-    )
     try:
         with conn.cursor() as cur:
             for stmt in statements(SCHEMA_FILE.read_text(encoding="utf-8")):
                 cur.execute(stmt)
+            for migration in sorted(MIGRATIONS_DIR.glob("*.sql")):
+                for stmt in statements(migration.read_text(encoding="utf-8")):
+                    cur.execute(stmt)
+                print(f"Applied migration {migration.name}")
             cur.execute("SHOW TABLES")
             tables = [row[0] for row in cur.fetchall()]
-        print(f"Schema applied to {os.environ['DB_HOST']}. Tables in spbuy: {', '.join(tables)}")
+        print(f"Schema applied to {settings.host}. Tables in {settings.database}: {', '.join(tables)}")
     finally:
         conn.close()
     return 0
