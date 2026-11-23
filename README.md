@@ -32,6 +32,14 @@ that are most likely to be fraud.
    variables, never hard-coded. A template `.env.example` is added under PBI-11; copy it to `.env`
    and fill in your own values. `.env` is ignored by git.
 
+## Loading a new data batch
+
+```bash
+python -m src.etl.run_etl --source <url-or-folder> --batch <postfix>
+```
+
+Reads `customers_<postfix>.csv`, `orders_<postfix>.csv` and `labels_<postfix>.csv`, cleans them and upserts them into RDS. See [`docs/etl.md`](docs/etl.md).
+
 ## How we work
 
 - **One issue per task.** Every task on the board is a GitHub issue with one owner.
