@@ -91,3 +91,7 @@ labels.customer_id              ──► customers.customer_id
 
 Training data = labels joined to orders on `(country_code, order_id)` and to customers on `customer_id`.
 Use inner joins for training, so the orphan rows found above are left out.
+
+## Nullable columns (updated in PBI-09)
+
+Only the key columns are `NOT NULL`. Every other data column allows `NULL`, because `src/cleaning.py` sets invalid values to `NULL` instead of dropping the row (e.g. 23 base orders with `order_value <= 0`, an unparseable `order_date`, an unmappable `mobile_verified`). Tables created before this change are updated by `sql/migrations/001_allow_nulls_from_cleaning.sql`.

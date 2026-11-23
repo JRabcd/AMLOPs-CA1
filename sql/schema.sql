@@ -1,6 +1,9 @@
 -- SP-buy fraud detection: RDS (MySQL 8) schema
 -- PBI-05.3. Design notes: docs/rds-schema.md
 -- Safe to run more than once: every statement uses IF NOT EXISTS.
+-- Keys are NOT NULL. Every other data column allows NULL, because cleaning (src/cleaning.py)
+-- sets invalid values to NULL rather than dropping the row (see docs/data_issue_log.md).
+-- Changes to tables that already exist go in sql/migrations/.
 
 CREATE DATABASE IF NOT EXISTS spbuy
   CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
@@ -11,12 +14,12 @@ USE spbuy;
 CREATE TABLE IF NOT EXISTS customers (
   customer_id                       VARCHAR(20)       NOT NULL,
   country_code                      CHAR(2)           NOT NULL,
-  mobile_verified                   BOOLEAN           NOT NULL,
-  num_orders_last_50days            SMALLINT UNSIGNED NOT NULL,
-  num_cancelled_orders_last_50days  SMALLINT UNSIGNED NOT NULL,
-  num_refund_orders_last_50days     SMALLINT UNSIGNED NOT NULL,
-  total_payment_last_50days         DECIMAL(12,4)     NOT NULL,
-  num_associated_customers          SMALLINT UNSIGNED NOT NULL,
+  mobile_verified                   BOOLEAN           NULL,
+  num_orders_last_50days            SMALLINT UNSIGNED NULL,
+  num_cancelled_orders_last_50days  SMALLINT UNSIGNED NULL,
+  num_refund_orders_last_50days     SMALLINT UNSIGNED NULL,
+  total_payment_last_50days         DECIMAL(12,4)     NULL,
+  num_associated_customers          SMALLINT UNSIGNED NULL,
   first_order_datetime              DATETIME          NULL,
   batch_id                          VARCHAR(32)       NOT NULL,
   loaded_at                         TIMESTAMP         NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
@@ -28,12 +31,12 @@ CREATE TABLE IF NOT EXISTS customers (
 CREATE TABLE IF NOT EXISTS orders (
   country_code       CHAR(2)           NOT NULL,
   order_id           VARCHAR(20)       NOT NULL,
-  collect_type       VARCHAR(20)       NOT NULL,
+  collect_type       VARCHAR(20)       NULL,
   payment_method     VARCHAR(40)       NULL,
-  order_value        DECIMAL(12,4)     NOT NULL,
+  order_value        DECIMAL(12,4)     NULL,
   num_items_ordered  SMALLINT UNSIGNED NULL,
-  refund_value       DECIMAL(12,4)     NOT NULL DEFAULT 0,
-  order_date         DATE              NOT NULL,
+  refund_value       DECIMAL(12,4)     NULL,
+  order_date         DATE              NULL,
   batch_id           VARCHAR(32)       NOT NULL,
   loaded_at          TIMESTAMP         NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (country_code, order_id),
