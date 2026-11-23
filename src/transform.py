@@ -11,11 +11,25 @@ and class weights using training data only. Customer activity must describe
 history available at each order's prediction time to avoid temporal leakage.
 """
 
+import logging
+
 import numpy as np
 import pandas as pd
 from sklearn.impute import SimpleImputer
 from sklearn.preprocessing import OneHotEncoder
 from sklearn.utils.class_weight import compute_class_weight
+
+# Match the named logger and console format used by src.cleaning.
+logger = logging.getLogger("transform")
+if not logger.handlers:
+    handler = logging.StreamHandler()
+    formatter = logging.Formatter(
+        "[%(asctime)s] [%(levelname)s] [transform]: %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
+    handler.setFormatter(formatter)
+    logger.addHandler(handler)
+    logger.setLevel(logging.INFO)
 
 
 def join_datasets(
@@ -25,7 +39,8 @@ def join_datasets(
 
     Composite keys must be unique within each input table. Labels supply
     customer IDs; unmatched labels are retained with missing joined values.
-    Print unmatched counts for diagnostics without modifying the inputs.
+    Log unmatched counts for diagnostics without modifying the inputs.
+    ``prepare_features`` excludes these orphans from the training extract.
     """
 
     # Ensure join keys are unique in their respective tables
@@ -64,8 +79,8 @@ def join_datasets(
     missing_customers = (merged["_merge"] == "left_only").sum()
     merged = merged.drop(columns=["_merge"])
 
-    print(f"Missing matching orders: {missing_orders}")
-    print(f"Missing matching customers: {missing_customers}")
+    logger.info("Missing matching orders: %s", missing_orders)
+    logger.info("Missing matching customers: %s", missing_customers)
 
     return merged
 
@@ -177,7 +192,10 @@ def create_derived_features(df: pd.DataFrame) -> pd.DataFrame:
     Return a copy with zero denominators and invalid inputs mapped to missing
     values. Age is measured in fractional days since the first order, rather
     than account registration. Negative ages and rates above one are retained
-    for upstream review. Current-order refund ratio is for analysis only.
+    for upstream review; the negative-age count is logged. A negative age
+    means the recorded first order is later than the current order. Review
+    source dates and snapshot timing before changing the feature definition.
+    Current-order refund ratio is for analysis only.
     """
 
     result = df.copy()
@@ -210,6 +228,9 @@ def create_derived_features(df: pd.DataFrame) -> pd.DataFrame:
     result["account_age_days"] = (
         order_dates - first_order_dates
     ).dt.total_seconds() / 86400
+
+    negative_ages = int((result["account_age_days"] < 0).sum())
+    logger.info("Negative account ages retained for upstream review: %s", negative_ages)
 
     # 3. Recent cancellation and refund rates
     total_orders = pd.to_numeric(
@@ -258,10 +279,12 @@ def prepare_features(
     customers: pd.DataFrame, orders: pd.DataFrame, labels: pd.DataFrame
 ) -> pd.DataFrame:
     """
-    Join cleaned datasets and create numerical features.
+    Join cleaned datasets and create a matched-only training extract.
 
     Expects inputs that have already passed through clean_batch().
     Does not fit encoders or perform a train/test split.
+    Preserve left-join diagnostics, then exclude records whose order or
+    customer key is absent. Matched records with missing features are retained.
 
     The returned frame retains identifiers, labels, dates, and refund fields
     for analysis; use ``build_model_features`` before passing it to a model.
@@ -271,6 +294,21 @@ def prepare_features(
 
     # Combine the three cleaned tables
     combined = join_datasets(customers, orders, labels)
+
+    # Test key membership, not feature completeness: valid dates may be missing.
+    order_keys = ["country_code", "order_id"]
+    customer_keys = ["country_code", "customer_id"]
+    matched_orders = pd.MultiIndex.from_frame(combined[order_keys]).isin(
+        pd.MultiIndex.from_frame(orders[order_keys])
+    )
+    matched_customers = pd.MultiIndex.from_frame(combined[customer_keys]).isin(
+        pd.MultiIndex.from_frame(customers[customer_keys])
+    )
+    matched = matched_orders & matched_customers
+    logger.info(
+        "Excluded orphan records from training extract: %s", int((~matched).sum())
+    )
+    combined = combined.loc[matched].copy()
 
     # Create derived features while raw columns are available
     combined = create_derived_features(combined)
