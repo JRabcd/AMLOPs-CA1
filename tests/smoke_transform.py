@@ -1,5 +1,6 @@
 """Manual real-data integration check; run as ``python -m tests.smoke_transform``.
 
+Set DATA_DIR to the CSV directory (for example, DATA_DIR=temp); default: data.
 Reads the full local CSVs before selecting up to 1,000 labels, so this is not
 a lightweight unit test. Run explicitly from the repository root with the
 datasets available. This module performs file I/O at import time.
@@ -12,6 +13,7 @@ evaluation, use customer groups (see DI-02) and verify that customer snapshots
 contain only information available at each order's prediction time.
 """
 
+import os
 from pathlib import Path
 
 import numpy as np
@@ -25,7 +27,7 @@ from src.transform import (
     prepare_features,
 )
 
-DATA_DIR = Path("temp")
+DATA_DIR = Path(os.environ.get("DATA_DIR", "data"))
 
 # Load actual CSVs
 customers = pd.read_csv(DATA_DIR / "customers_base.csv")
@@ -73,10 +75,7 @@ features = prepare_features(
 
 print("\nPrepared features:", features.shape)
 
-# Require valid order values and first-order dates before splitting.
-# This also drops matched records whose values became missing during cleaning;
-# these fields are not a strict test of whether a join matched.
-features = features.dropna(subset=["order_value", "first_order_datetime"])
+# prepare_features excludes orphans by key; retain valid rows with missing dates.
 
 # Split before fitting preprocessing; this is not a customer-isolated split.
 train_df, test_df = train_test_split(
@@ -100,5 +99,18 @@ print("Class weights:", weights)
 assert X_train.columns.tolist() == X_test.columns.tolist()
 assert np.isfinite(X_train.to_numpy()).all()
 assert np.isfinite(X_test.to_numpy()).all()
+excluded = {
+    "country_code",
+    "order_id",
+    "customer_id",
+    "is_fraud",
+    "order_date",
+    "first_order_datetime",
+    "refund_value",
+    "refund_value_log1p",
+    "refund_ratio",
+}
+assert excluded.isdisjoint(X_train.columns)
+assert excluded.isdisjoint(X_test.columns)
 
 print("\nSMOKE TEST PASSED")
