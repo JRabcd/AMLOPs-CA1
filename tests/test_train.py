@@ -85,6 +85,15 @@ def test_order_month_is_added_without_changing_the_input(frame):
     assert "order_month" not in frame and out.order_month.between(1, 12).all()
 
 
+def test_order_month_reaches_the_final_feature_matrix(frame):
+    parts = tc.split(frame)
+    (Xtr, _), (Xva, _), (Xte, _), _ = tc.make_matrices(train_memberA.add_order_month(frame), *parts)
+    for X, rows in zip((Xtr, Xva, Xte), parts):
+        assert np.array_equal(X["order_month"], frame.order_date.iloc[rows].dt.month)
+    (plain, _), _, _, _ = tc.make_matrices(frame, *parts)
+    assert set(Xtr.columns) - set(plain.columns) == {"order_month"}
+
+
 def test_versions_differ_as_documented():
     assert train_memberA.V1["class_weight"] == "balanced" and "class_weight" not in train_memberA.V2
 
