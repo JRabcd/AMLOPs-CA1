@@ -7,3 +7,5 @@ jupyter
 jupyterlab
 ipykernel
 scikit-learn
+lightgbm
+mlflow==3.18.0
