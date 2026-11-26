@@ -7,3 +7,6 @@ jupyter
 jupyterlab
 ipykernel
 scikit-learn
+lightgbm
+xgboost
+mlflow
