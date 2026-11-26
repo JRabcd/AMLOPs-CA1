@@ -30,10 +30,9 @@ V2 = dict(
 )
 
 
-def main(batch="base"):
-    connect_mlflow()
-    f = load_frame()
-    data = make_matrices(f, *split(f))
+def train(frame, batch="base", plots=True):
+    """Train both models on a loaded frame for the retraining pipeline."""
+    data = make_matrices(frame, *split(frame))
     results = {}
     results["logreg_v1"] = train_and_log(
         "logreg_v1",
@@ -42,6 +41,7 @@ def main(batch="base"):
         data,
         member="ZhengHao",
         batch=batch,
+        plots=plots,
     )
     results["histgb_v2"] = train_and_log(
         "histgb_v2",
@@ -50,8 +50,14 @@ def main(batch="base"):
         data,
         member="ZhengHao",
         batch=batch,
+        plots=plots,
     )
     return results
+
+
+def main(batch="base"):
+    connect_mlflow()
+    return train(load_frame(), batch)
 
 
 if __name__ == "__main__":
