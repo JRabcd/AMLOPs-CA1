@@ -27,10 +27,34 @@ that are most likely to be fraud.
    python -m venv .venv
    ```
    Activate it with `.venv\Scripts\activate` (Windows) or `source .venv/bin/activate` (macOS/Linux).
-2. Put the data files in `data/` (see [`data/README.md`](data/README.md)).
+2. Install the project and its runtime dependencies from the repository root:
+   ```bash
+   python -m pip install -e .
+   ```
+   This makes the local `src` package importable, including when running scripts in
+   `deploy_mlflow_aws/`. Do not run `pip install src`: `src` is this repository's
+   code, not an external dependency. For the plotting and notebook tools as well,
+   run `python -m pip install -r requirements.txt`.
+   Put the data files in `data/` (see [`data/README.md`](data/README.md)).
 3. Resource settings (RDS host, database credentials, MLflow URL) are read from environment
-   variables, never hard-coded. A template `.env.example` is added under PBI-11; copy it to `.env`
+   variables or `.env`. Copy the `.env.example` template to `.env`
    and fill in your own values. `.env` is ignored by git.
+
+## Running Model C
+
+Use the project virtual environment (in VS Code, select `.venv/Scripts/python.exe`
+as the Python interpreter). From the repository root:
+
+```powershell
+.\.venv\Scripts\python.exe -m pip check
+$env:PYTHONIOENCODING = "utf-8"
+.\.venv\Scripts\python.exe -m src.train_memberC --batch base
+```
+
+The PBI-07C implementation is `src/train_memberC.py`; `modelC_test.py` calls it
+to verify real model uploads to Elastic Beanstalk. Configure `MLFLOW_TRACKING_URI`
+and `DATA_DIR` in `.env` or your shell before running. See [the PBI-07C run guide](docs/pbi07c.md)
+for local and AWS commands, verified results, and the v1-to-v2 diagnosis.
 
 ## Loading a new data batch
 
