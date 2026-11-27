@@ -24,7 +24,8 @@ CREATE TABLE IF NOT EXISTS customers (
   batch_id                          VARCHAR(32)       NOT NULL,
   loaded_at                         TIMESTAMP         NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (customer_id),
-  KEY idx_customers_country (country_code)
+  KEY idx_customers_country (country_code),
+  KEY idx_customers_loaded_at (loaded_at)
 ) ENGINE=InnoDB;
 
 -- One row per order. order_id alone is not unique (same ID in two countries), so the key is (country_code, order_id).
@@ -40,7 +41,8 @@ CREATE TABLE IF NOT EXISTS orders (
   batch_id           VARCHAR(32)       NOT NULL,
   loaded_at          TIMESTAMP         NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (country_code, order_id),
-  KEY idx_orders_date (order_date)
+  KEY idx_orders_date (order_date),
+  KEY idx_orders_loaded_at (loaded_at)
 ) ENGINE=InnoDB;
 
 -- One fraud label per order. No foreign keys: some labels have no matching order/customer,
@@ -54,6 +56,7 @@ CREATE TABLE IF NOT EXISTS labels (
   loaded_at     TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (country_code, order_id),
   KEY idx_labels_customer (customer_id),
+  KEY idx_labels_loaded_at (loaded_at),
   CONSTRAINT chk_labels_is_fraud CHECK (is_fraud IN (0, 1))
 ) ENGINE=InnoDB;
 

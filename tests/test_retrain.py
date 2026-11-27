@@ -47,10 +47,14 @@ class FakeConn:
     def __exit__(self, *exc):
         return False
 
-    def execute(self, sql):
+    def execute(self, sql, params=None):
         assert sql.startswith("SELECT")  # retraining only reads
+        if sql == "SELECT NOW()":
+            self.result = [("2026-11-26 12:00:00",)]
+            return
         table = sql.split(" FROM ")[1].split()[0]
-        self.result = self.batches if table == "etl_batches" else RDS_ROWS[table]
+        rows = self.batches if table == "etl_batches" else RDS_ROWS[table]
+        self.result = [(len(rows),)] if "COUNT(*)" in sql else rows
 
     def fetchall(self):
         return self.result
@@ -76,13 +80,18 @@ def test_latest_batch():
         rt.latest_batch(FakeConn(batches=[]))
 
 
-def test_load_training_frame_joins_rds_tables(monkeypatch):
+@pytest.mark.parametrize("use_cache", [False, True])
+def test_load_training_frame_joins_rds_tables(monkeypatch, tmp_path, use_cache):
     conn = FakeConn()
     monkeypatch.setattr(rt, "connect", lambda **kw: conn)
-    frame, batch = rt.load_training_frame()
-    assert batch == "base" and len(frame) == 2 and conn.closed
-    assert frame.set_index("country_code").is_fraud.to_dict() == {"MY": 0, "PK": 1}
-    assert rt.load_training_frame("X1")[1] == "X1"
+    monkeypatch.setattr(rt, "CACHE_DIR", tmp_path / "cache")
+    monkeypatch.setattr("src.rds_cache._identity", lambda: "fake-db")
+    for _ in range(2):  # with the cache, the second read comes from the local copy
+        frame, batch = rt.load_training_frame(use_cache=use_cache)
+        assert batch == "base" and len(frame) == 2 and conn.closed
+        assert frame.set_index("country_code").is_fraud.to_dict() == {"MY": 0, "PK": 1}
+    assert (tmp_path / "cache").exists() == use_cache
+    assert rt.load_training_frame("X1", use_cache=False)[1] == "X1"
 
 
 def fake_trainer(monkeypatch, name, train):

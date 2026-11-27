@@ -18,6 +18,7 @@ import importlib
 import logging
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 
 import pandas as pd
@@ -27,13 +28,14 @@ from pymysql.converters import conversions
 
 from src.db.config import connect
 from src.etl.load import COLUMNS
-from src.train_common import connect_mlflow, drop_unusable
+from src.rds_cache import CACHE_DIR, read_tables
+from src.train_common import clear_matrix_cache, connect_mlflow, drop_unusable
 from src.transform import prepare_features
 
 logger = logging.getLogger("retrain")
 if not logger.handlers:
     _h = logging.StreamHandler()
-    _h.setFormatter(logging.Formatter("[%(asctime)s] [%(levelname)s] [retrain]: %(message)s", datefmt="%Y-%m-%d %H:%M:%S"))
+    _h.setFormatter(logging.Formatter("[%(asctime)s] [%(levelname)s] [retrain:%(threadName)s]: %(message)s", datefmt="%Y-%m-%d %H:%M:%S"))
     logger.addHandler(_h)
     logger.setLevel(logging.INFO)
     logger.propagate = False
@@ -110,13 +112,17 @@ def latest_batch(conn) -> str:
     return row[0]
 
 
-def load_training_frame(batch: str | None = None) -> tuple[pd.DataFrame, str]:
-    """All labelled orders in RDS as model-ready rows, plus the batch name to use for the runs."""
+def load_training_frame(batch: str | None = None, use_cache: bool = True) -> tuple[pd.DataFrame, str]:
+    """All labelled orders in RDS as model-ready rows, plus the batch name to use for the runs.
+
+    With use_cache, only rows changed since the last read are downloaded (src/rds_cache.py).
+    """
     t0 = time.perf_counter()
-    conn = connect(conv=_CONVERTERS)
+    # Slow networks take more than the default 60 s to receive a big table; give them 10 minutes.
+    conn = connect(conv=_CONVERTERS, init_command="SET SESSION net_write_timeout = 600")
     try:
         batch = batch or latest_batch(conn)
-        tables = {t: read_table(conn, t) for t in ("customers", "orders", "labels")}
+        tables = read_tables(conn, to_clean_types, cache_dir=CACHE_DIR if use_cache else None)
     finally:
         conn.close()
     logger.info("Read from RDS in %.1fs: %s", time.perf_counter() - t0,
@@ -139,26 +145,48 @@ def find_trainer(module_name: str):
     return module.train
 
 
-def retrain(frame: pd.DataFrame, batch: str, members=("A", "B", "C"), plots: bool = True) -> RetrainResult:
-    """Run each member's training on the same frame; keep going if one member fails."""
+def train_member(letter: str, frame: pd.DataFrame, batch: str, plots: bool) -> tuple[str, dict | None, str | None]:
+    """Train one member's models. Returns (name, {model: metrics} or None if skipped, error or None)."""
+    name, module_name = TRAINERS[letter]
+    try:
+        train = find_trainer(module_name)
+        if train is None:
+            logger.warning("Skipping %s: %s.py is not in the repo yet", name, module_name.replace(".", "/"))
+            return name, None, None
+        logger.info("Training %s's models ...", name)
+        start = time.perf_counter()
+        runs = train(frame, batch=batch, plots=plots)
+        logger.info("%s done in %.1fs", name, time.perf_counter() - start)
+        return name, runs, None
+    except Exception as exc:  # one member's bug must not stop the others
+        logger.exception("%s's training failed", name)
+        return name, None, f"{type(exc).__name__}: {exc}"
+
+
+def retrain(frame: pd.DataFrame, batch: str, members=("A", "B", "C"), plots: bool = True,
+            parallel: bool = True) -> RetrainResult:
+    """Run each member's training on the same frame; keep going if one member fails.
+
+    parallel=True trains the members in threads at the same time. Most of the time goes on
+    uploading models to the MLflow server, and uploads at the same time don't slow each other
+    down, so this is what keeps the pipeline under 3 minutes (PBI-12). MLflow keeps a separate
+    active run per thread, and train_common draws plots without pyplot, so threads are safe.
+    """
     result = RetrainResult(batch=batch, rows=len(frame))
     t0 = time.perf_counter()
-    for letter in members:
-        name, module_name = TRAINERS[letter]
-        try:
-            train = find_trainer(module_name)
-            if train is None:
-                logger.warning("Skipping %s: %s.py is not in the repo yet", name, module_name.replace(".", "/"))
-                result.skipped.append(name)
-                continue
-            logger.info("Training %s's models ...", name)
-            start = time.perf_counter()
-            for model, metrics in train(frame, batch=batch, plots=plots).items():
-                result.runs[f"{name}/{model}"] = metrics
-            logger.info("%s done in %.1fs", name, time.perf_counter() - start)
-        except Exception as exc:  # one member's bug must not stop the others
-            logger.exception("%s's training failed", name)
-            result.failed[name] = f"{type(exc).__name__}: {exc}"
+    if parallel and len(members) > 1:
+        with ThreadPoolExecutor(max_workers=len(members), thread_name_prefix="member") as pool:
+            outcomes = list(pool.map(lambda letter: train_member(letter, frame, batch, plots), members))
+    else:
+        outcomes = [train_member(letter, frame, batch, plots) for letter in members]
+    for name, runs, error in outcomes:  # in member order, whatever order they finished in
+        if error:
+            result.failed[name] = error
+        elif runs is None:
+            result.skipped.append(name)
+        else:
+            result.runs.update({f"{name}/{model}": metrics for model, metrics in runs.items()})
+    clear_matrix_cache()  # free the shared feature matrices
     result.seconds = time.perf_counter() - t0
     return result
 
@@ -182,6 +210,8 @@ def parse_args(argv=None) -> argparse.Namespace:
     ap.add_argument("--members", nargs="+", choices=sorted(TRAINERS), default=sorted(TRAINERS),
                     help="Which members' models to train (default: all)")
     ap.add_argument("--no-plots", action="store_true", help="Skip the confusion matrix and PR curve images")
+    ap.add_argument("--sequential", action="store_true", help="Train members one after another, not at the same time")
+    ap.add_argument("--no-cache", action="store_true", help="Download every row from RDS instead of only changed rows")
     return ap.parse_args(argv)
 
 
@@ -189,11 +219,11 @@ def main(argv=None) -> int:
     args = parse_args(argv)
     try:
         connect_mlflow()  # fail before the slow part if MLflow isn't configured
-        frame, batch = load_training_frame(args.batch)
+        frame, batch = load_training_frame(args.batch, use_cache=not args.no_cache)
     except (RuntimeError, pymysql.MySQLError) as exc:
         logger.error("Retraining stopped: %s", exc)
         return 1
-    result = retrain(frame, batch, members=args.members, plots=not args.no_plots)
+    result = retrain(frame, batch, members=args.members, plots=not args.no_plots, parallel=not args.sequential)
     logger.info("Summary\n%s", summary(result))
     return 0 if result.ok else 1
 

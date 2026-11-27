@@ -12,16 +12,14 @@ sqlite:///mlflow.db.
 """
 from __future__ import annotations
 
+import hashlib
 import os
 import tempfile
+import threading
 import time
 from pathlib import Path
 
 import joblib
-import matplotlib
-
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
 import mlflow
 import numpy as np
 import pandas as pd
@@ -35,6 +33,7 @@ from sklearn.metrics import (
     recall_score,
     roc_auc_score,
 )
+from matplotlib.figure import Figure
 from sklearn.model_selection import GroupShuffleSplit
 
 from src.cleaning import clean_batch
@@ -74,8 +73,35 @@ def split(frame: pd.DataFrame) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     return older[tr], older[va], test
 
 
+_matrix_cache: dict = {}
+_matrix_cache_lock = threading.Lock()
+
+
 def make_matrices(frame: pd.DataFrame, train, validation, test):
-    """Feature matrices and targets. Validation and test are transformed together so columns match."""
+    """Feature matrices and targets. Validation and test are transformed together so columns match.
+
+    The result is cached for the same frame object and split, so members who train on identical
+    inputs during retraining build them once (about 5 s each on the base data). Threads asking
+    for the same matrices at the same time wait for the first one. Treat the returned frames as
+    read-only. retrain.py calls clear_matrix_cache() when it finishes, to free the memory.
+    """
+    rows = np.concatenate([train, validation, test])
+    key = (id(frame), tuple(frame.columns), len(train), len(validation), hashlib.sha1(rows.tobytes()).hexdigest())
+    with _matrix_cache_lock:
+        # Keeping `frame` in the entry keeps it alive, so its id can't be reused by another frame.
+        entry = _matrix_cache.setdefault(key, {"lock": threading.Lock(), "frame": frame, "value": None})
+    with entry["lock"]:
+        if entry["value"] is None:
+            entry["value"] = _build_matrices(frame, train, validation, test)
+        return entry["value"]
+
+
+def clear_matrix_cache() -> None:
+    with _matrix_cache_lock:
+        _matrix_cache.clear()
+
+
+def _build_matrices(frame: pd.DataFrame, train, validation, test):
     held = np.concatenate([validation, test])
     X_train, X_held, artifacts = build_model_features(frame.iloc[train], frame.iloc[held])
     n = len(validation)
@@ -106,22 +132,39 @@ def score(y_true, proba, threshold: float) -> dict[str, float]:
     }
 
 
+def requirements(*packages: str) -> list[str]:
+    """Pinned pip requirements for a logged model, from the installed versions.
+
+    Passing these to log_model saves ~8 s per model: otherwise MLflow starts a separate Python
+    process to work out the requirements itself, which matters for the 3-minute pipeline (PBI-12).
+    """
+    from importlib.metadata import PackageNotFoundError, version
+
+    pinned = []
+    for package in ("mlflow", "numpy", "pandas", "scikit-learn", *packages):
+        try:
+            pinned.append(f"{package}=={version(package)}")
+        except PackageNotFoundError:
+            pinned.append(package)
+    return pinned
+
+
 def log_model(model) -> None:
     """Each library needs its own MLflow flavour: mlflow.sklearn rejects LightGBM and XGBoost objects."""
     kind = type(model).__module__.split(".")[0]
     if kind == "lightgbm":
         import mlflow.lightgbm
 
-        mlflow.lightgbm.log_model(model, name="model")
+        mlflow.lightgbm.log_model(model, name="model", pip_requirements=requirements("lightgbm"))
     elif kind == "xgboost":
         import mlflow.xgboost
 
-        mlflow.xgboost.log_model(model, name="model")
+        mlflow.xgboost.log_model(model, name="model", pip_requirements=requirements("xgboost"))
     else:
         import mlflow.sklearn
 
         # MLflow 3 blocks HistGradientBoosting's tree type unless it is trusted (it is our own model).
-        mlflow.sklearn.log_model(model, name="model", skops_trusted_types=[
+        mlflow.sklearn.log_model(model, name="model", pip_requirements=requirements("skops"), skops_trusted_types=[
             "sklearn.ensemble._hist_gradient_boosting.predictor.TreePredictor"])
 
 
@@ -156,15 +199,13 @@ def train_and_log(name: str, model, params: dict, data, member: str, batch: str 
         mlflow.log_metrics(metrics)
         with tempfile.TemporaryDirectory() as tmp:
             joblib.dump(artifacts, Path(tmp) / "preprocessing.joblib")
-            if plots:
-                fig, ax = plt.subplots()
+            if plots:  # Figure objects, not pyplot: safe when members train in parallel threads
+                ax = Figure().subplots()
                 ConfusionMatrixDisplay.from_predictions(y_test, (p_test >= threshold).astype(int), ax=ax)
-                fig.savefig(Path(tmp) / "confusion_matrix.png")
-                plt.close(fig)
-                fig, ax = plt.subplots()
+                ax.figure.savefig(Path(tmp) / "confusion_matrix.png")
+                ax = Figure().subplots()
                 PrecisionRecallDisplay.from_predictions(y_test, p_test, ax=ax)
-                fig.savefig(Path(tmp) / "pr_curve.png")
-                plt.close(fig)
+                ax.figure.savefig(Path(tmp) / "pr_curve.png")
             mlflow.log_artifacts(tmp)
         log_model(model)
     print(f"{run_name}: test PR-AUC {metrics['test_pr_auc']:.4f}, precision {metrics['test_precision']:.3f}, "
