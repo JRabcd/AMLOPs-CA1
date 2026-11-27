@@ -50,7 +50,8 @@ VALIDATION_FRACTION = 0.15
 def load_frame() -> pd.DataFrame:
     """Cleaned and feature-engineered rows from the base CSVs in DATA_DIR (default data/).
 
-    PBI-10 replaces this with a read from RDS; everything below only needs the returned frame.
+    For training on your own laptop. Retraining reads the same rows from RDS instead
+    (src/retrain.py, load_training_frame); everything below only needs the returned frame.
     """
     folder = Path(os.environ.get("DATA_DIR", "data"))
     batch = clean_batch(*(pd.read_csv(folder / f"{t}_base.csv", dtype=str) for t in ("customers", "orders", "labels")))
