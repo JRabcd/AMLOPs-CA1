@@ -1,3 +1,4 @@
+-e .
 pymysql[rsa]>=1.2.4
 pandas
 numpy
