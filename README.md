@@ -6,6 +6,7 @@ retrains fraud-detection models and tracks them in MLflow, so analysts can focus
 that are most likely to be fraud.
 
 - **Product backlog and sprint board:** [GitHub Project](https://github.com/users/JRabcd/projects/1)
+- **IT infrastructure managers:** set-up, configuration and running the pipeline: [`docs/it-manager-guide.md`](docs/it-manager-guide.md)
 - **Team (Group 3):** Qian Yunyang (`qyyqianyy`), Jian Rong (`JRabcd`), Zheng Hao (`lzh1625`)
 
 ## Repository layout
