@@ -27,6 +27,7 @@ venv/
 # MLflow (local runs; the team server is on Elastic Beanstalk)
 mlruns/
 mlartifacts/
+persistence_reference.json
 *.db
 
 # Editors and OS
