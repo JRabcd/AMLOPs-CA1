@@ -80,13 +80,14 @@ copy .env.example .env            # macOS/Linux: cp .env.example .env
 | `DB_USER` | yes | Database user | `admin` |
 | `DB_PASSWORD` | yes | That user's password | |
 | `DB_NAME` | no | Database name, default `spbuy` | `spbuy` |
-| `MLFLOW_TRACKING_URI` | for training | Address of the MLflow server | `http://<environment>.elasticbeanstalk.com` |
+| `MLFLOW_TRACKING_URI` | for training | Address of the MLflow server | `http://spbuy-mlflow-group3.us-east-1.elasticbeanstalk.com` |
 
 To change a setting, edit `.env` (or the environment variable) and run the command again; no code changes are
 needed. `.env` is in `.gitignore`, so it is never committed. Share it with team members privately.
 
 **When the password changes:** update `DB_PASSWORD` in every `.env` that uses it, then run
-`python -m src.db.check_connection` to confirm.
+`python -m src.db.check_connection` to confirm. The MLflow server also uses it: update its `DB_PASSWORD`
+environment property in Elastic Beanstalk ([5. MLflow server](#5-mlflow-server)).
 
 ## 3. Running the pipeline
 
@@ -145,7 +146,73 @@ Delete `.cache/` (or add `--no-cache`) to force a full download.
 
 ## 5. MLflow server
 
-The MLflow server runs as a Docker container on AWS Elastic Beanstalk. The deployment files are in
-`deploy_mlflow_aws/` (`Dockerfile`, the nginx upload limit in `.platform/`, and the zip uploaded to Elastic
-Beanstalk). The team is moving its storage to RDS and S3 (PBI-13) so that runs survive restarts; the
-step-by-step redeployment instructions will be added here once that is final (PBI-14.1).
+The MLflow server runs as a Docker container on AWS Elastic Beanstalk, in the same Learner Lab as the RDS
+database. Address: `http://spbuy-mlflow-group3.us-east-1.elasticbeanstalk.com` (this goes in
+`MLFLOW_TRACKING_URI`).
+
+Its storage outlives the server (PBI-13), so stopping the lab or redeploying loses nothing:
+
+| What | Where |
+|---|---|
+| Experiments, runs, metrics, registered models | MySQL database `mlflow` on the RDS instance (separate from `spbuy`) |
+| Model files and plots | S3 bucket `spbuy-mlflow-992382399434`, folder `artifacts/` |
+
+Team laptops upload model files through the server, so they need no AWS credentials.
+
+Deployment files in `deploy_mlflow_aws/`: `Dockerfile`, `start_server.py` (reads the settings below, creates
+the `mlflow` database if missing, starts MLflow), the nginx upload limit in `.platform/`, and
+`mlflow-eb-v3.zip` (those three files, the bundle uploaded to Elastic Beanstalk), plus `deploy_eb.sh`, which
+deploys the bundle in one command.
+
+### Before the first deployment (once per RDS instance)
+
+MLflow creates database triggers, which RDS MySQL refuses while backups are on unless
+`log_bin_trust_function_creators` is 1. The team's instance uses the parameter group `spbuy-mysql84`
+(family `mysql8.4`, that one value changed). For a new instance: **RDS → Parameter groups → Create**, set
+the value to 1, then **Databases → the instance → Modify → DB parameter group**, **Apply immediately**, and
+**Actions → Reboot** (about 2 minutes offline).
+
+### Deploy or redeploy (one command)
+
+`deploy_mlflow_aws/deploy_eb.sh` does the whole deployment from AWS CloudShell, so nothing needs to be
+installed on a laptop:
+
+1. In the Learner Lab, open the AWS console and click **CloudShell** (bottom left).
+2. **Actions → Upload file**: upload `deploy_eb.sh` and `mlflow-eb-v3.zip` from `deploy_mlflow_aws/`.
+3. Run:
+
+   ```bash
+   bash deploy_eb.sh
+   ```
+
+If `spbuy-mlflow-env` exists, the script uploads the zip as a new application version and redeploys it.
+If it doesn't, it creates the S3 bucket, the application and the environment with the settings below, and
+asks for the RDS password (typed, not shown, stored only as an environment property). It finishes by
+checking that `http://<environment>/health` answers. A first deployment takes 6–8 minutes.
+
+### Deploy or redeploy (AWS console, by hand)
+
+The same steps without the script:
+
+1. **S3 → Create bucket** for the model files (the team's is `spbuy-mlflow-992382399434`), default settings.
+2. **Elastic Beanstalk → Create application**:
+   - Platform **Docker** (Amazon Linux 2023), upload `mlflow-eb-v3.zip`, preset **Single instance**.
+   - Service role **LabRole**, EC2 instance profile **LabInstanceProfile** (Learner Lab names).
+   - Instance type `t3.medium` (4 GB). On a `t3.small` (2 GB) the instance ran out of memory and stopped
+     answering.
+   - **Environment properties**: `DB_HOST`, `DB_USER`, `DB_PASSWORD` (the RDS values from `.env`) and
+     `MLFLOW_S3_BUCKET` (the bucket name). Optional: `DB_PORT` (3306), `MLFLOW_DB_NAME` (`mlflow`),
+     `MLFLOW_WORKERS` (1).
+3. Wait for health **Ok**, open the environment's URL and check the MLflow page loads, then put the URL in
+   everyone's `.env` as `MLFLOW_TRACKING_URI`.
+
+To change a setting later: **Configuration → Updates, monitoring and logging → Environment properties → Edit
+→ Apply**. To deploy new code: rebuild the zip and **Upload and deploy**. The RDS security group must allow
+port 3306 from the Elastic Beanstalk instance (the team's allows it from anywhere).
+
+### When the lab restarts
+
+Start the Learner Lab and wait a few minutes: RDS and the Elastic Beanstalk instance start again on their
+own, and all runs are still there. If the page doesn't load after 10 minutes, open **Elastic Beanstalk →
+spbuy-mlflow-env → Logs → Request logs → Last 100 lines**: `Missing environment property` means a setting
+is empty, and `Can't connect to MySQL` means RDS is not running yet or the security group blocks it.
