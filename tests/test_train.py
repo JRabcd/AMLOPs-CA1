@@ -107,3 +107,25 @@ def test_both_versions_train_and_log(frame, tmp_path, monkeypatch):
     runs = tc.mlflow.search_runs(experiment_names=[tc.EXPERIMENT])
     assert set(runs["tags.mlflow.runName"]) == {"etl_T1_QianYunyang_lgbm_v1", "etl_T1_QianYunyang_lgbm_v2"}
     assert {"test_pr_auc", "test_precision", "test_recall", "test_f1", "test_false_alarm_rate"} <= set(res["lgbm_v2"])
+
+
+def test_matrices_are_built_once_and_shared_between_threads(frame, monkeypatch):
+    import threading
+
+    tc.clear_matrix_cache()
+    calls = []
+    real = tc._build_matrices
+    monkeypatch.setattr(tc, "_build_matrices", lambda *a: calls.append(1) or real(*a))
+    parts = tc.split(frame)
+    results = []
+    threads = [threading.Thread(target=lambda: results.append(tc.make_matrices(frame, *parts))) for _ in range(4)]
+    [t.start() for t in threads]
+    [t.join() for t in threads]
+    assert len(calls) == 1 and all(r is results[0] for r in results)
+    # a different frame (e.g. with order_month added) gets its own matrices
+    tc.make_matrices(train_memberA.add_order_month(frame), *parts)
+    assert len(calls) == 2
+    tc.clear_matrix_cache()
+    tc.make_matrices(frame, *parts)
+    assert len(calls) == 3
+    tc.clear_matrix_cache()

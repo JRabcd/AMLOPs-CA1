@@ -111,8 +111,8 @@ def run_etl(locations: dict[str, str], batch_id: str | None = None, force: bool 
     return result
 
 
-def parse_args(argv=None) -> argparse.Namespace:
-    p = argparse.ArgumentParser(description="Load one batch of customers/orders/labels CSVs into RDS.")
+def add_batch_args(p: argparse.ArgumentParser) -> None:
+    """Arguments that say where a batch's three CSVs are (shared with src/run_pipeline.py)."""
     p.add_argument("--source", help="Folder or URL prefix holding <table>_<batch>.csv files")
     p.add_argument("--batch", help="Batch postfix, e.g. XXX for customers_XXX.csv (used with --source)")
     p.add_argument("--customers", help="customers CSV URL or path")
@@ -120,21 +120,34 @@ def parse_args(argv=None) -> argparse.Namespace:
     p.add_argument("--labels", help="labels CSV URL or path")
     p.add_argument("--batch-id", help="Override the batch name recorded in RDS")
     p.add_argument("--force", action="store_true", help="Reload a batch that already loaded successfully")
-    p.add_argument("--dry-run", action="store_true", help="Read and clean only; don't write to RDS")
-    args = p.parse_args(argv)
+
+
+def check_batch_args(p: argparse.ArgumentParser, args: argparse.Namespace) -> None:
     explicit = [args.customers, args.orders, args.labels]
     if args.source or args.batch:
         if not (args.source and args.batch) or any(explicit):
             p.error("use --source with --batch, or give --customers, --orders and --labels")
     elif not all(explicit):
         p.error("give --source and --batch, or all three of --customers, --orders and --labels")
+
+
+def locations_from(args: argparse.Namespace) -> dict[str, str]:
+    return (batch_locations(args.source, args.batch) if args.source
+            else {"customers": args.customers, "orders": args.orders, "labels": args.labels})
+
+
+def parse_args(argv=None) -> argparse.Namespace:
+    p = argparse.ArgumentParser(description="Load one batch of customers/orders/labels CSVs into RDS.")
+    add_batch_args(p)
+    p.add_argument("--dry-run", action="store_true", help="Read and clean only; don't write to RDS")
+    args = p.parse_args(argv)
+    check_batch_args(p, args)
     return args
 
 
 def main(argv=None) -> int:
     args = parse_args(argv)
-    locations = (batch_locations(args.source, args.batch) if args.source
-                 else {"customers": args.customers, "orders": args.orders, "labels": args.labels})
+    locations = locations_from(args)
     try:
         result = run_etl(locations, batch_id=args.batch_id or args.batch, force=args.force, dry_run=args.dry_run)
     except Exception as exc:  # e.g. missing settings or RDS unreachable before the run started

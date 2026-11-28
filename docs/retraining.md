@@ -8,6 +8,8 @@ python -m src.retrain                  # runs named after the latest successful 
 python -m src.retrain --batch XXX      # or name them yourself
 python -m src.retrain --members A C    # only some members' models
 python -m src.retrain --no-plots       # skip the confusion matrix and PR curve images
+python -m src.retrain --sequential     # members one after another (default: at the same time)
+python -m src.retrain --no-cache       # download every row instead of only changed rows
 ```
 
 Settings come from `.env` (copy `.env.example`): `DB_*` for RDS and `MLFLOW_TRACKING_URI` for the team MLflow
@@ -55,7 +57,5 @@ split and metrics and can be compared fairly in the model review (PBI-08). Nothi
 
 ## Timing
 
-Base data, member A only, local MLflow store: **86 s** in total (26 s reading RDS, 6 s building features,
-45 s training and logging two models, the rest starting Python and MLflow). Logging to the remote server adds
-upload time. Six models in one process will not fit the 3-minute demo limit together with the ETL as they are;
-PBI-12 deals with that.
+Members train at the same time (threads) and only rows changed since the last run are downloaded from RDS.
+Details and measurements are in [`docs/pipeline.md`](pipeline.md), which runs the ETL and this retraining in one command (PBI-12).
