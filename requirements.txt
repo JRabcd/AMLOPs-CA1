@@ -9,4 +9,6 @@ jupyterlab
 ipykernel
 scikit-learn
 lightgbm
+xgboost
+mlflow
 mlflow==3.18.0
