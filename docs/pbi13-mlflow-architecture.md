@@ -59,7 +59,13 @@ improve persistence without requiring a change to the existing training workflow
 | Deployment package review | Codex compared the v3 ZIP with the Dockerfile, startup script and nginx configuration; all three entries matched their source files byte for byte. |
 | Offline automated tests | Codex reported **28 passing tests**, including mocked MLflow operations and real local model serialization/reloading. These tests do not establish AWS persistence. |
 | Independent live pre-restart test | The user reported **all 27 checks passing**: accessibility of **21 baseline run IDs**, test-run accessibility/status, parameters, metrics, text-artifact retrieval/content, the exact registered model version and model predictions. Codex did not execute these live checks. |
-| Independent post-restart test | **Pending:** the Learner Lab is currently unavailable. Independent post-restart verification and historical artifact retrieval have not been demonstrated. |
+| Independent live post-restart test | The user reported **all 27 checks passing** after restart. All **21 baseline run IDs** remained accessible; test metadata, artifact contents, the exact registered model version and model predictions were preserved. The test artifact was successfully downloaded. Codex did not execute these live checks. |
+| Logging after recovery | The user reported that new runs can be logged after recovery. |
+| Service recovery time | QYY reported that the Learner Lab restarted at approximately **20:55**, with the server taking about **33 minutes** to become accessible again. |
+
+These results demonstrate persistence of the checked run records and test assets
+across the restart. Historical production artifacts were **not independently
+verified**; successful retrieval refers to the dedicated test artifact.
 
 [`persistence_setup.py`](../deploy_mlflow_aws/persistence_setup.py) creates the
 dedicated `pbi13-persistence-test` experiment and registers a deterministic decision
@@ -80,7 +86,9 @@ baseline establishes evidence from recovery onward, not from the failed attempt.
 ## 5. Remaining limitations
 
 - The single-instance deployment is **not highly available**; persistent storage
-  does not eliminate application downtime.
+  does not eliminate application downtime. The reported recovery took about
+  **33 minutes**, so service availability and recovery time remain limitations
+  even though the persistence checks passed.
 - HTTP transport, wildcard allowed hosts/CORS and the absence of authentication
   configuration in the supplied deployment files remain security concerns.
 - Sharing RDS with the application can cause CPU, memory, connection and I/O contention.
@@ -90,5 +98,6 @@ baseline establishes evidence from recovery onward, not from the failed attempt.
   literal plus sign. Credentials containing spaces may fail; the supplied startup
   script remains unchanged.
 
-The teammate's reported restart result and the independent pre-restart checks
-support the design, but independent post-restart evidence remains outstanding.
+The independent pre- and post-restart checks demonstrate persistence for the
+tested records, artifact and model. They do not establish high availability or
+independently verify historical production artifacts.
